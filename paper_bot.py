@@ -22,6 +22,23 @@ STATE, LOG = "paper_state.json", "paper_trades.csv"
 
 
 # ---------- data ----------
+YAHOO = {"XAUUSDT": "GC=F"}      # gold fallback when Binance blocks the server (e.g. GitHub Actions)
+
+
+def fetch_yahoo(sym):
+    r = requests.get(f"https://query1.finance.yahoo.com/v8/finance/chart/{YAHOO[sym]}",
+                     params=dict(interval="15m", range="5d"),
+                     headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
+    r.raise_for_status()
+    res = r.json()["chart"]["result"][0]
+    q = res["indicators"]["quote"][0]
+    df = pd.DataFrame(dict(t=np.array(res["timestamp"], dtype=float) * 1000,
+                           open=q["open"], high=q["high"], low=q["low"],
+                           close=q["close"], volume=q["volume"]))
+    df = df.dropna(subset=["open", "high", "low", "close"]).fillna({"volume": 0.0})
+    return df.iloc[:-1].reset_index(drop=True)          # drop the unfinished candle
+
+
 def fetch(sym, limit=1500):
     urls = ["https://fapi.binance.com/fapi/v1/klines",          # futures (preferred)
             "https://data-api.binance.vision/api/v3/klines"]     # spot mirror (fallback)
@@ -34,6 +51,12 @@ def fetch(sym, limit=1500):
             df.columns = ["t", "open", "high", "low", "close", "volume"]
             df = df.astype(float)
             return df.iloc[:-1].reset_index(drop=True)      # drop the unfinished candle
+        except Exception as e:
+            last = e
+    if sym in YAHOO:
+        try:
+            print(f"[{sym}] Binance blocked, using Yahoo {YAHOO[sym]} instead")
+            return fetch_yahoo(sym)
         except Exception as e:
             last = e
     raise RuntimeError(f"{sym}: could not fetch data ({last})")
@@ -179,7 +202,11 @@ def log_trade(row):
 def live_once():
     state = json.load(open(STATE)) if os.path.exists(STATE) else {}
     for sym in SYMBOLS:
-        df = prep(fetch(sym, 400))
+        try:
+            df = prep(fetch(sym, 400))
+        except Exception as e:
+            print(f"[{sym}] data error, skipping this round: {e}")
+            continue
         S = signals(df)
         i = len(df) - 1
         tr = state.get(sym)
