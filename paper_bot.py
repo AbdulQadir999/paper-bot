@@ -201,6 +201,7 @@ def log_trade(row):
 
 def live_once():
     state = json.load(open(STATE)) if os.path.exists(STATE) else {}
+    last = state.setdefault("_last", {})      # last candle already processed, per symbol
     for sym in SYMBOLS:
         try:
             df = prep(fetch(sym, 400))
@@ -208,33 +209,37 @@ def live_once():
             print(f"[{sym}] data error, skipping this round: {e}")
             continue
         S = signals(df)
-        i = len(df) - 1
-        tr = state.get(sym)
-        if tr:                                            # check open paper trade
-            for j in range(len(df)):
-                if df.t.iat[j] <= tr["t"]: continue
+        n = len(df)
+        last_t = last.get(sym)
+        # first run: latest candle only. After that: every candle we haven't seen yet
+        todo = [n - 1] if last_t is None else [j for j in range(n) if df.t.iat[j] > last_t]
+        for j in todo:
+            tr = state.get(sym)
+            if tr:                                        # manage the open paper trade
+                if df.t.iat[j] <= tr["t"]:
+                    continue
                 d, hi, lo = tr["dir"], df.high.iat[j], df.low.iat[j]
                 hit_sl = lo <= tr["sl"] if d == 1 else hi >= tr["sl"]
                 hit_tp = hi >= tr["tp"] if d == 1 else lo <= tr["tp"]
                 if hit_sl or hit_tp:
                     dist = abs(tr["entry"] - tr["sl"])
                     r = (-1.0 if hit_sl else RR) - 2 * FEE * tr["entry"] / dist
-                    log_trade([sym, d, tr["t"], df.t.iat[j], tr["entry"], tr["sl"], tr["tp"],
+                    log_trade([sym, d, tr["t"], float(df.t.iat[j]), tr["entry"], tr["sl"], tr["tp"],
                                round(r, 3), "|".join(tr["signals"])])
                     print(f"[{sym}] CLOSED {'SL' if hit_sl else 'TP'} {r:+.2f}R")
-                    state[sym] = tr = None
-                    break
-        if tr is None:
-            score = sum(v[i] for v in S.values())
-            if abs(score) >= MIN_SCORE:
-                d = int(np.sign(score))
-                entry, dist = df.close.iat[i], SL_ATR * df.atr.iat[i]
-                state[sym] = dict(dir=d, entry=entry, sl=entry - d * dist, tp=entry + d * dist * RR,
-                                  t=df.t.iat[i], signals=[k for k, v in S.items() if v[i] == d])
-                print(f"[{sym}] OPEN {'LONG' if d == 1 else 'SHORT'} @ {entry} "
-                      f"SL {state[sym]['sl']:.4f} TP {state[sym]['tp']:.4f} | {state[sym]['signals']}")
-            else:
-                print(f"[{sym}] no trade (score {score})")
+                    state[sym] = None
+            else:                                         # look for a new entry
+                score = sum(v[j] for v in S.values())
+                if abs(score) >= MIN_SCORE and not np.isnan(df.atr.iat[j]):
+                    d = int(np.sign(score))
+                    entry, dist = float(df.close.iat[j]), float(SL_ATR * df.atr.iat[j])
+                    state[sym] = dict(dir=d, entry=entry, sl=entry - d * dist, tp=entry + d * dist * RR,
+                                      t=float(df.t.iat[j]), signals=[k for k, v in S.items() if v[j] == d])
+                    print(f"[{sym}] OPEN {'LONG' if d == 1 else 'SHORT'} @ {entry} "
+                          f"SL {state[sym]['sl']:.4f} TP {state[sym]['tp']:.4f} | {state[sym]['signals']}")
+        last[sym] = float(df.t.iat[n - 1])
+        print(f"[{sym}] checked {len(todo)} new candle(s), latest score "
+              f"{sum(v[n - 1] for v in S.values())}, {'trade open' if state.get(sym) else 'no open trade'}")
     json.dump(state, open(STATE, "w"))
 
 
