@@ -1,1 +1,1 @@
-{"_last": {"XAUUSDT": 1795801500000.0, "SOLUSDT": 1795836600000.0}, "SOLUSDT": null, "XAUUSDT": null}
+{"_last": {"XAUUSDT": 1795801500000.0, "SOLUSDT": 1795868100000.0}, "SOLUSDT": {"dir": -1, "entry": 71.16, "sl": 71.54420357948396, "tp": 70.39159284103205, "t": 1795851000000.0, "signals": ["ema_trend", "pin_bar", "fvg"]}, "XAUUSDT": null}
